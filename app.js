@@ -91,6 +91,8 @@ async function api(path, data) {
   saveSoon();
   // Pendant la connexion / le QCM, un code 52x n'est pas une « session expirée » : on laisse l'appelant afficher le vrai message de l'API
   const authCall = /login\.awp|doubleauth\.awp/.test(path);
+  if (authCall && o.json && !o.json.token && o.json.data && typeof o.json.data.token === 'string' && o.json.data.token) S.token = o.json.data.token; // jeton éventuellement dans data
+  if (authCall) S.dbg = (S.dbg ? S.dbg + ' | ' : '') + path.replace(/^.*\/(\w+)\.awp.*$/, '$1') + ':' + (o.json && o.json.code) + ' hdr=' + (o.token ? o.token.length : 0) + ' corps=' + (o.json && o.json.token ? o.json.token.length : 0) + ' data=' + (o.json && o.json.data ? Object.keys(o.json.data).slice(0, 6).join('+') : '-') + ' ck=' + Object.keys(o.cookies || {}).join('+');
   if (o.json && [520, 521, 525].includes(o.json.code) && !authCall) {
     sess.clear(); show('login'); $('#loginErr').textContent = 'Session expirée : reconnecte-toi.';
     throw new Error('Session expirée');
@@ -159,7 +161,7 @@ async function startQcm() {
   let q = await api('/v3/connexion/doubleauth.awp?verbe=get', {});
   // 520 = jeton refusé : on réessaie avec l'autre jeton reçu au login (corps de la réponse 250 ou en-tête X-Token), sans en inventer
   if (q.code === 520 && S.tokenAlt && S.tokenAlt !== S.token) { S.token = S.tokenAlt; S.tokenAlt = null; q = await api('/v3/connexion/doubleauth.awp?verbe=get', {}); }
-  if (q.code !== 200) throw new Error('Double authentification impossible : ' + (q.message || 'erreur') + ' [étape : question du QCM]');
+  if (q.code !== 200) throw new Error('Double authentification impossible : ' + (q.message || 'erreur') + ' [étape : question du QCM] {' + S.dbg + '}');
   if (!q.data || !q.data.question || !Array.isArray(q.data.propositions) || !q.data.propositions.length) throw new Error('Question de sécurité indisponible');
   $('#question').textContent = b64(q.data.question);
   $('#choix').innerHTML = q.data.propositions.map((p) => `<option value="${esc(p)}">${esc(b64(p))}</option>`).join('');
@@ -200,7 +202,7 @@ async function doLogin() {
   $('#loginErr').textContent = '';
   $('#go').disabled = true;
   try {
-    S.token = ''; S.cookies = {}; // repartir de zéro : un ancien jeton envoyé au login ferait répondre 52x
+    S.dbg = ''; S.tokenAlt = null; S.token = ''; S.cookies = {}; // repartir de zéro : un ancien jeton envoyé au login ferait répondre 52x
     S.demo = false; // une connexion normale n'est jamais mélangée avec la démonstration
     const gate = await demoGate($('#id').value, $('#pw').value);
     if (gate === 'demo') { await startDemo(); $('#go').disabled = false; return; }
