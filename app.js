@@ -86,12 +86,16 @@ async function api(path, data) {
   const o = await r.json().catch(() => ({ error: 'Relais injoignable : réessaie dans un instant.' }));
   if (o.error) throw new Error(o.error);
   if (o.token) S.token = o.token;
+  else if (o.json && typeof o.json.token === 'string' && o.json.token) S.token = o.json.token; // la réponse 250 (QCM) peut fournir le jeton dans le corps et non dans l'en-tête
   if (o.cookies) S.cookies = o.cookies;
   saveSoon();
-  if ([520, 521, 525].includes(o.json.code)) {
+  // Pendant la connexion / le QCM, un code 52x n'est pas une « session expirée » : on laisse l'appelant afficher le vrai message de l'API
+  const authCall = /login\.awp|doubleauth\.awp/.test(path);
+  if (o.json && [520, 521, 525].includes(o.json.code) && !authCall) {
     sess.clear(); show('login'); $('#loginErr').textContent = 'Session expirée : reconnecte-toi.';
     throw new Error('Session expirée');
   }
+  if (o.json && authCall && [520, 521, 525].includes(o.json.code)) o.json.message = (o.json.message || 'Connexion refusée') + ' (code ' + o.json.code + ')';
   return o.json;
 }
 // Lecture mise en cache (mémoire) : les appels identiques simultanés n'en font qu'un, et la réponse est réutilisée pendant « ttl » ms
@@ -194,6 +198,7 @@ async function doLogin() {
   $('#loginErr').textContent = '';
   $('#go').disabled = true;
   try {
+    S.token = ''; S.cookies = {}; // repartir de zéro : un ancien jeton envoyé au login ferait répondre 52x
     S.demo = false; // une connexion normale n'est jamais mélangée avec la démonstration
     const gate = await demoGate($('#id').value, $('#pw').value);
     if (gate === 'demo') { await startDemo(); $('#go').disabled = false; return; }
