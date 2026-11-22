@@ -137,8 +137,8 @@ const faStore = {
 };
 async function login(fa = []) {
   const res = await api('/v3/login.awp', { identifiant: $('#id').value.trim(), motdepasse: $('#pw').value, isReLogin: false, uuid: '', fa });
-  if (res.code === 250) { if (fa.length) faStore.clear(); return startQcm(); } // 250 = QCM exigé (clés absentes ou refusées)
-  if (res.code !== 200) throw new Error(res.message || 'Connexion refusée (code ' + res.code + ')');
+  if (res.code === 250) { if (fa.length) faStore.clear(); if (res.token && res.token !== S.token) S.tokenAlt = res.token; return startQcm(); } // 250 = QCM exigé (clés absentes ou refusées)
+  if (res.code !== 200) throw new Error((res.message || 'Connexion refusée') + ' [étape : connexion, code ' + res.code + ']');
   const acc = res.data.accounts[0];
   S.eleves = acc.typeCompte === 'E' ? [acc] : acc.profile?.eleves || [];
   if (!S.eleves.length) throw new Error('Aucun élève trouvé sur ce compte.');
@@ -156,8 +156,10 @@ async function login(fa = []) {
 }
 
 async function startQcm() {
-  const q = await api('/v3/connexion/doubleauth.awp?verbe=get', {});
-  if (q.code !== 200) throw new Error(q.message || 'Double authentification impossible');
+  let q = await api('/v3/connexion/doubleauth.awp?verbe=get', {});
+  // 520 = jeton refusé : on réessaie avec l'autre jeton reçu au login (corps de la réponse 250 ou en-tête X-Token), sans en inventer
+  if (q.code === 520 && S.tokenAlt && S.tokenAlt !== S.token) { S.token = S.tokenAlt; S.tokenAlt = null; q = await api('/v3/connexion/doubleauth.awp?verbe=get', {}); }
+  if (q.code !== 200) throw new Error('Double authentification impossible : ' + (q.message || 'erreur') + ' [étape : question du QCM]');
   if (!q.data || !q.data.question || !Array.isArray(q.data.propositions) || !q.data.propositions.length) throw new Error('Question de sécurité indisponible');
   $('#question').textContent = b64(q.data.question);
   $('#choix').innerHTML = q.data.propositions.map((p) => `<option value="${esc(p)}">${esc(b64(p))}</option>`).join('');
