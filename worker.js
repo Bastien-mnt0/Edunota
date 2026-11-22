@@ -7,7 +7,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 // Routes récentes (cloud, menus de la cantine) : on utilise la version du site officiel
 const newer = (p) => p.startsWith('/v3/cloud/') || p.startsWith('/v3/menusRestaurationScolaire') || p.includes('leTypeDeFichier=FICHIER_MENU_RESTAURATION') || p.includes('leTypeDeFichier=CLOUD');
-async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = false, form, upload, ver } = {}) {
+async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = false, form, upload, ver, t2fa } = {}) {
   const jar = { ...cookies };
   const headers = {
     'User-Agent': UA,
@@ -20,6 +20,7 @@ async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = f
   if (upload) headers['Content-Type'] = upload.type; // multipart déjà construit par le navigateur (frontière incluse)
   if (jar.GTK) headers['X-GTK'] = jar.GTK;
   if (token) headers['X-Token'] = token;
+  if (t2fa) headers['2FA-Token'] = t2fa; // second jeton de la double authentification, requis dès le premier appel doubleauth.awp
   const res = await fetch(`${BASE}${urlPath}${urlPath.includes('?') ? '&' : '?'}v=${ver || (newer(urlPath) ? CLOUD_VERSION : API_VERSION)}`, {
     method,
     headers,
@@ -29,9 +30,10 @@ async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = f
     const kv = c.split(';')[0], i = kv.indexOf('=');
     jar[kv.slice(0, i).trim()] = kv.slice(i + 1);
   }
+  const t2 = res.headers.get('2fa-token') || undefined;
   if (raw) return { res, token: res.headers.get('x-token'), cookies: jar };
   const json = await res.json().catch(() => ({ code: 0, message: 'Réponse invalide' }));
-  return { json, token: res.headers.get('x-token'), cookies: jar };
+  return { json, token: res.headers.get('x-token'), t2fa: t2, cookies: jar };
 }
 
 // Fichiers : id numérique (cahier de texte) ; pour le cloud (type CLOUD), l'id peut être un chemin (sans « .. »).
@@ -97,10 +99,10 @@ export default {
         return reply({ cookies: r.cookies });
       }
       if (req.method === 'POST' && pathname === '/api/ed') {
-        const { path, data, token, cookies } = await req.json();
+        const { path, data, token, cookies, t2fa } = await req.json();
         if (typeof path !== 'string' || !okRoute(path)) return reply({ error: 'chemin refusé' }, 400);
         if (isAuth(path) ? limited(ip, 'login', 20, 600e3) : limited(ip, 'api', 240, 60e3)) return tooMany();
-        return reply(await ed(path, { token: cleanToken(token), data, cookies: cleanCookies(cookies) }));
+        return reply(await ed(path, { token: cleanToken(token), t2fa: cleanToken(t2fa), data, cookies: cleanCookies(cookies) }));
       }
       if (req.method === 'POST' && pathname.startsWith('/api/ed-') && limited(ip, 'file', 60, 60e3)) return tooMany();
       if (req.method === 'POST' && pathname === '/api/ed-upload') {

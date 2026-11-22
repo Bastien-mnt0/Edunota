@@ -25,7 +25,7 @@ function record(entry) {
 
 // Routes récentes (cloud, menus de la cantine) : on utilise la version du site officiel
 const newer = (p) => p.startsWith('/v3/cloud/') || p.startsWith('/v3/menusRestaurationScolaire') || p.includes('leTypeDeFichier=FICHIER_MENU_RESTAURATION') || p.includes('leTypeDeFichier=CLOUD');
-async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = false, form, upload, ver } = {}) {
+async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = false, form, upload, ver, t2fa } = {}) {
   const jar = { ...cookies };
   const headers = {
     'User-Agent': UA,
@@ -38,6 +38,7 @@ async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = f
   if (upload) headers['Content-Type'] = upload.type; // multipart déjà construit par le navigateur (frontière incluse)
   if (jar.GTK) headers['X-GTK'] = jar.GTK;
   if (token) headers['X-Token'] = token;
+  if (t2fa) headers['2FA-Token'] = t2fa; // second jeton de la double authentification, requis dès le premier appel doubleauth.awp
   const res = await fetch(`${BASE}${urlPath}${urlPath.includes('?') ? '&' : '?'}v=${ver || (newer(urlPath) ? CLOUD_VERSION : API_VERSION)}`, {
     method,
     headers,
@@ -47,9 +48,10 @@ async function ed(urlPath, { method = 'POST', token, data, cookies = {}, raw = f
     const kv = c.split(';')[0], i = kv.indexOf('=');
     jar[kv.slice(0, i).trim()] = kv.slice(i + 1);
   }
+  const t2 = res.headers.get('2fa-token') || undefined;
   if (raw) return { res, token: res.headers.get('x-token'), cookies: jar };
   const json = await res.json().catch(() => ({ code: 0, message: 'Réponse invalide' }));
-  return { json, token: res.headers.get('x-token'), cookies: jar };
+  return { json, token: res.headers.get('x-token'), t2fa: t2, cookies: jar };
 }
 
 // Fichiers : id numérique (cahier de texte) ; pour le cloud (type CLOUD), l'id peut être un chemin (sans « .. »).
@@ -100,9 +102,9 @@ http.createServer(async (req, res) => {
       return send(res, 200, { cookies: r.cookies });
     }
     if (req.method === 'POST' && req.url === '/api/ed') {
-      const { path: p, data, token, cookies } = await readBody(req);
+      const { path: p, data, token, cookies, t2fa } = await readBody(req);
       if (typeof p !== 'string' || !okRoute(p)) return send(res, 400, { error: 'chemin refusé' });
-      const out = await ed(p, { token: cleanToken(token), data, cookies: cleanCookies(cookies) });
+      const out = await ed(p, { token: cleanToken(token), t2fa: cleanToken(t2fa), data, cookies: cleanCookies(cookies) });
       if (LOG) record({ time: new Date().toISOString(), path: p, v: newer(p) ? CLOUD_VERSION : API_VERSION, request: data, response: out.json });
       return send(res, 200, out);
     }

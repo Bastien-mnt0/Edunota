@@ -82,17 +82,18 @@ async function post(url, body, tries) {
 async function api(path, data) {
   if (S.demo) return window.EdunotaDemo.api(path, data); // démonstration : données fictives locales, aucun appel réseau
   const read = /verbe=get/.test(path) && !/login|doubleauth/.test(path); // les lectures peuvent être rejouées sans risque
-  const r = await post(PROXY_URL + '/api/ed', JSON.stringify({ path, data, token: S.token, cookies: S.cookies }), read ? 2 : 1);
+  const r = await post(PROXY_URL + '/api/ed', JSON.stringify({ path, data, token: /doubleauth\.awp/.test(path) ? undefined : S.token, t2fa: /login\.awp|doubleauth\.awp/.test(path) ? S.t2fa : undefined, cookies: S.cookies }), read ? 2 : 1);
   const o = await r.json().catch(() => ({ error: 'Relais injoignable : réessaie dans un instant.' }));
   if (o.error) throw new Error(o.error);
   if (o.token) S.token = o.token;
   else if (o.json && typeof o.json.token === 'string' && o.json.token) S.token = o.json.token; // la réponse 250 (QCM) peut fournir le jeton dans le corps et non dans l'en-tête
+  if (o.t2fa) S.t2fa = o.t2fa; // 2FA-Token : se renouvelle à chaque réponse de la double authentification
   if (o.cookies) S.cookies = o.cookies;
   saveSoon();
   // Pendant la connexion / le QCM, un code 52x n'est pas une « session expirée » : on laisse l'appelant afficher le vrai message de l'API
   const authCall = /login\.awp|doubleauth\.awp/.test(path);
   if (authCall && o.json && !o.json.token && o.json.data && typeof o.json.data.token === 'string' && o.json.data.token) S.token = o.json.data.token; // jeton éventuellement dans data
-  if (authCall) S.dbg = (S.dbg ? S.dbg + ' | ' : '') + path.replace(/^.*\/(\w+)\.awp.*$/, '$1') + ':' + (o.json && o.json.code) + ' hdr=' + (o.token ? o.token.length : 0) + ' corps=' + (o.json && o.json.token ? o.json.token.length : 0) + ' data=' + (o.json && o.json.data ? Object.keys(o.json.data).slice(0, 6).join('+') : '-') + ' ck=' + Object.keys(o.cookies || {}).join('+');
+  if (authCall) S.dbg = (S.dbg ? S.dbg + ' | ' : '') + path.replace(/^.*\/(\w+)\.awp.*$/, '$1') + ':' + (o.json && o.json.code) + ' hdr=' + (o.token ? o.token.length : 0) + ' 2fa=' + (o.t2fa ? o.t2fa.length : 0) + ' corps=' + (o.json && o.json.token ? o.json.token.length : 0) + ' data=' + (o.json && o.json.data ? Object.keys(o.json.data).slice(0, 6).join('+') : '-') + ' ck=' + Object.keys(o.cookies || {}).join('+');
   if (o.json && [520, 521, 525].includes(o.json.code) && !authCall) {
     sess.clear(); show('login'); $('#loginErr').textContent = 'Session expirée : reconnecte-toi.';
     throw new Error('Session expirée');
@@ -139,8 +140,9 @@ const faStore = {
 };
 async function login(fa = []) {
   const res = await api('/v3/login.awp', { identifiant: $('#id').value.trim(), motdepasse: $('#pw').value, isReLogin: false, uuid: '', fa });
-  if (res.code === 250) { if (fa.length) faStore.clear(); if (res.token && res.token !== S.token) S.tokenAlt = res.token; return startQcm(); } // 250 = QCM exigé (clés absentes ou refusées)
+  if (res.code === 250) { if (fa.length) faStore.clear(); return startQcm(); } // 250 = QCM exigé (clés absentes ou refusées)
   if (res.code !== 200) throw new Error((res.message || 'Connexion refusée') + ' [étape : connexion, code ' + res.code + ']');
+  S.t2fa = ''; // connexion terminée : le 2FA-Token ne sert plus
   const acc = res.data.accounts[0];
   S.eleves = acc.typeCompte === 'E' ? [acc] : acc.profile?.eleves || [];
   if (!S.eleves.length) throw new Error('Aucun élève trouvé sur ce compte.');
@@ -158,9 +160,7 @@ async function login(fa = []) {
 }
 
 async function startQcm() {
-  let q = await api('/v3/connexion/doubleauth.awp?verbe=get', {});
-  // 520 = jeton refusé : on réessaie avec l'autre jeton reçu au login (corps de la réponse 250 ou en-tête X-Token), sans en inventer
-  if (q.code === 520 && S.tokenAlt && S.tokenAlt !== S.token) { S.token = S.tokenAlt; S.tokenAlt = null; q = await api('/v3/connexion/doubleauth.awp?verbe=get', {}); }
+  const q = await api('/v3/connexion/doubleauth.awp?verbe=get', {}); // seul 2FA-Token est envoyé (pas X-Token) ; data = {} obligatoire
   if (q.code !== 200) throw new Error('Double authentification impossible : ' + (q.message || 'erreur') + ' [étape : question du QCM] {' + S.dbg + '}');
   if (!q.data || !q.data.question || !Array.isArray(q.data.propositions) || !q.data.propositions.length) throw new Error('Question de sécurité indisponible');
   $('#question').textContent = b64(q.data.question);
@@ -202,7 +202,7 @@ async function doLogin() {
   $('#loginErr').textContent = '';
   $('#go').disabled = true;
   try {
-    S.dbg = ''; S.tokenAlt = null; S.token = ''; S.cookies = {}; // repartir de zéro : un ancien jeton envoyé au login ferait répondre 52x
+    S.t2fa = ''; S.dbg = ''; S.tokenAlt = null; S.token = ''; S.cookies = {}; // repartir de zéro : un ancien jeton envoyé au login ferait répondre 52x
     S.demo = false; // une connexion normale n'est jamais mélangée avec la démonstration
     const gate = await demoGate($('#id').value, $('#pw').value);
     if (gate === 'demo') { await startDemo(); $('#go').disabled = false; return; }
